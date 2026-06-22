@@ -1,0 +1,178 @@
+================================================================
+AiGIS 開発作業記録
+実施日：2026年6月22日
+================================================================
+
+----------------------------------------------------------------
+【1】GitHubリポジトリからの最新ファイル適用
+----------------------------------------------------------------
+
+対象リポジトリ：https://github.com/s1310157/AiGIS
+
+■ GitHubクローン
+  - C:\Users\teruy\Claude\Projects\Aigis\src\ にフルクローン
+
+■ 2026年6月22日時点の最新コミット（差分ファイル4件）を確認・適用：
+  - src/aigis/ui/MainFrame.java          → template/Win/AiGIS/src/aigis/ui/ に上書き
+  - src/aigis/ui/MainFrameDesign.java    → template/Win/AiGIS/src/aigis/ui/ に上書き
+  - src/aigis/i18n/messages_en.properties → template/Win/AiGIS/src/aigis/i18n/ に新規追加
+  - src/aigis/i18n/messages_ja.properties → template/Win/AiGIS/src/aigis/i18n/ に新規追加
+
+■ 適用前バックアップ：
+  - template/Win/backup_aigis_080622/
+
+----------------------------------------------------------------
+【2】ベンチャー体験工房フォルダの整理
+----------------------------------------------------------------
+
+■ 削除したファイル（重複・不要）：
+  - aigis_v20250428_win.zip（69.6MB）
+      → 展開済みフォルダ aigis_v20250428_win/ と内容が完全に重複
+  - AiGIS_v20260511.zip（198.3MB）
+      → ファイル名は新しいが、中身は AiGIS_v20250428/ と同一内容
+
+■ 整理後の構成：
+  ベンチャー体験工房/
+  ├── aigis_v20250428_win/         （Windows実行可能バイナリ）
+  ├── Itokawa_Multi-Models_sample/ （イトカワサンプルデータ）
+  ├── Ryugu_sample/                （リュウグウサンプルデータ）
+  ├── sbmt-0.9.1.4-2026.03.12_Windows_x64/ （SBMTツール）
+  └── template/                    （ビルドテンプレート・最新ソース適用済み）
+
+----------------------------------------------------------------
+【3】タスク01：言語切り替え時のウィンドウサイズバグ修正
+----------------------------------------------------------------
+
+■ 対象ファイル：
+  src/aigis/ui/MainFrame.java
+
+■ 問題：
+  メニューから言語（日本語 ⇔ English）を切り替えると、
+  rebuildUI() 内で新フレームが固定サイズ 1400x1000 で生成され、
+  位置も画面中央にリセットされてしまう。
+
+■ 修正内容（L95-103）：
+  【修正前】
+    public void rebuildUI() {
+        SwingUtilities.invokeLater(() -> {
+            dispose();
+            MainFrame frame = new MainFrame();
+            frame.setSize(1400, 1000);          // 固定値
+            frame.setLocationRelativeTo(null);  // 位置リセット
+            frame.setVisible(true);
+        });
+    }
+
+  【修正後】
+    public void rebuildUI() {
+        Dimension size = this.getSize();        // 現在サイズを退避
+        Point location = this.getLocation();    // 現在位置を退避
+        SwingUtilities.invokeLater(() -> {
+            dispose();
+            MainFrame frame = new MainFrame();
+            frame.setSize(size);                // サイズ強制維持
+            frame.setLocation(location);        // 位置強制維持
+            frame.setVisible(true);
+            frame.revalidate();
+            frame.repaint();
+        });
+    }
+
+■ バックアップ：src/aigis/backup_ui_080622_1826/
+■ ビルド結果：Exit code 0（成功）
+
+----------------------------------------------------------------
+【4】タスク02：別モデル同時表示機能の実装（データ構造拡張）
+----------------------------------------------------------------
+
+■ 対象ファイル：
+  src/aigis/ui/GLSplitWindow.java
+
+■ 問題：
+  全ビューポート（0〜3）が単一の Scene インスタンスを共有しており、
+  異なる小惑星モデル（イトカワ・リュウグウ等）を別々の画面に
+  同時表示できなかった。
+
+■ 修正内容：
+  1. private Scene scene  →  private Scene[] scenes = new Scene[4]
+     （ビューポートごとに独立したSceneを保持できるデータ構造に変更）
+
+  2. 新規メソッド追加：
+     public void setScene(int viewportIndex, Scene scene)
+     → 外部から特定ビューポートへ任意のSceneを割り当てるAPI
+
+  3. private Scene getSceneForViewport(int index)
+     → Sceneが未設定のビューポートは[0]のSceneにフォールバック
+
+  4. display() 内のレンダリングループ改修：
+     → 各ビューポートのSceneを個別にコンパイル・テクスチャ初期化
+
+  5. divide() 改修：
+     → Renderer生成時にビューポート別Sceneを使用
+
+  6. resetRenderer() 改修：
+     → ビューポート別SceneのmodelSizeでカメラを初期化
+
+■ 使用例（将来の比較表示実装時）：
+  Scene ryuguScene = new Scene();
+  ryuguScene.load(ryuguDir, dialog, true);
+  window.setScene(1, ryuguScene); // ビューポート1にリュウグウを割当
+
+■ バックアップ：src/aigis/backup_ui_080622_1832/
+             src/aigis/backup_gl_080622_1832/
+■ ビルド結果：Exit code 0（成功）
+
+----------------------------------------------------------------
+【5】タスク03：ズーム連動型2Dスケールバー表示機能の実装
+----------------------------------------------------------------
+
+■ 新規作成ファイル：
+  src/aigis/gl/ScaleBar.java
+
+■ 変更ファイル：
+  src/aigis/gl/Renderer.java
+
+■ 機能概要：
+  カメラのDistanceとFOVの値をリアルタイムに参照し、
+  3D座標→2D画面ピクセル変換を行って、画面左下に
+  「地図の縮尺のようなスケールバー」をオーバーレイ表示する。
+
+■ 計算ロジック（透視投影）：
+  可視高さ(km)   = 2 × camera.distance × tan(camera.fov / 2)
+  m/ピクセル     = 可視高さ(m) / viewportの高さ(px)
+  目標バー長(m)  = m/ピクセル × viewportの幅 / 5
+  表示値         = 1,2,5,10,20,50,100,200,500,1000m から最も近い値に丸め
+  バー幅(px)     = 表示値(m) / m/ピクセル
+
+■ 表示仕様：
+  - 位置：左下隅（常時表示、モデル読み込み後から有効）
+  - ラベル：「100 m」「1 km」など自動フォーマット
+  - 白色の矩形バー＋黒縁取り＋両端ティックマーク
+  - ズームイン・ズームアウトに連動してリアルタイム変化
+
+■ Renderer.java への追加（renderOthers メソッド内）：
+  private ScaleBar scaleBar = new ScaleBar();  // フィールド追加
+  scaleBar.draw(gl, viewport[2], viewport[3], camera);  // 呼び出し追加
+
+■ バックアップ：src/aigis/backup_gl_080622_1835/
+■ ビルド結果：Exit code 0（成功・warningのみ）
+
+----------------------------------------------------------------
+【6】新規JARビルド・実行環境への反映
+----------------------------------------------------------------
+
+■ ビルド手順：
+  - バックアップフォルダを除外してjavacコンパイル
+  - リソース（res/, i18n/*.properties）をJARにパッケージ
+  - MANIFEST.MF を使用してAiGIS.jar を生成
+
+■ 配置：
+  旧 AiGIS.jar（203KB）→ AiGIS.jar.bak としてバックアップ保存
+  新 AiGIS.jar（227KB）→ ベンチャー体験工房/aigis_v20250428_win/win/app/ に配置
+
+■ JARサイズ増加の理由：
+  ScaleBar.java の追加、messages_en/ja.properties の追加による
+
+================================================================
+作業完了
+================================================================
